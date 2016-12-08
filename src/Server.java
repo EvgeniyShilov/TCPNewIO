@@ -1,4 +1,6 @@
+import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
@@ -88,9 +90,31 @@ public class Server {
         send(key, "Server time: " + dateFormat.format(date));
     }
 
-    private void download(SelectionKey key, String argument) throws IOException {
-        //TODO: remove placeholder
-        send(key, argument);
+    private void download(SelectionKey key, String filename) throws IOException {
+        File file = new File(filename);
+        if (!file.exists()) {
+            send(key, "No file");
+            return;
+        }
+        send(key, String.valueOf(file.length()));
+        RandomAccessFile fileReader = new RandomAccessFile(file, "r");
+        SocketChannel client = (SocketChannel) key.channel();
+        ByteBuffer buffer = ByteBuffer.allocate(Constants.BUFFER_SIZE);
+        int bytesRead = client.read(buffer);
+        if (bytesRead < 0) close(key);
+        else {
+            buffer.flip();
+            long uploadedBytes = Long.parseLong(new String(buffer.array()).trim());
+            while (true) {
+                fileReader.seek(uploadedBytes);
+                byte[] bytes = new byte[Constants.BUFFER_SIZE];
+                int countBytes = fileReader.read(bytes);
+                if (countBytes <= 0) break;
+                send(key, bytes);
+                uploadedBytes += countBytes;
+                System.out.println(client.socket().getRemoteSocketAddress() + " <<< " + countBytes + " bytes");
+            }
+        }
     }
 
     private void send(SelectionKey key, String response) throws IOException {
