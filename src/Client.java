@@ -32,10 +32,9 @@ public class Client {
                 String command = user.readLine().trim();
                 if (command.length() == 0) continue;
                 if (process(command)) break;
-                String response = receiveLine();
-                System.out.println(server.socket().getRemoteSocketAddress() + " >>> " + response);
             }
         } catch (IOException ignored) {
+            ignored.printStackTrace();
         } finally {
             System.out.println(server.socket().getRemoteSocketAddress() + " disconnected");
         }
@@ -47,45 +46,39 @@ public class Client {
                 : command.toLowerCase().substring(0, delimiterIndex).trim();
         switch (act) {
             case "download":
-                predownload(command);
+                prepareDownload(command);
                 break;
             case "close":
                 send(command);
                 return true;
             default:
                 send(command);
+                String response = receiveLine();
+                System.out.println(server.socket().getRemoteSocketAddress() + " >>> " + response);
         }
         return false;
     }
 
-    private void predownload(String command) throws IOException {
+    private void prepareDownload(String command) throws IOException {
         int delimiterIndex = command.indexOf(" ");
         String filename = delimiterIndex == -1 ? "" : command.substring(delimiterIndex).trim();
         File file = new File("client " + filename);
         if (file.exists()) {
             Pair<File, String> desiredFile = findUnderDownloadedFileBy(file.getName());
             if (desiredFile != null) {
-                Long fileSize = checkFileOnRemote(command);
-                if (fileSize == null) return;
-                if (desiredFile.getValue().equals(server.socket().getRemoteSocketAddress().toString())) {
-                    download(file, file.length(), fileSize);
-                } else {
+                if (desiredFile.getValue().equals(server.socket().getRemoteSocketAddress().toString()))
+                    download(command, file, file.length());
+                else {
                     file.delete();
                     underDownloadedFiles.remove(desiredFile);
-                    download(file, 0, fileSize);
+                    download(command, file, 0);
                 }
-            } else {
-                System.out.println("File already exists");
-            }
-        } else {
-            Long fileSize = checkFileOnRemote(command);
-            if (fileSize == null) return;
-            download(file, 0, fileSize);
-        }
+            } else System.out.println("File already exists");
+        } else download(command, file, 0);
     }
 
-    private Long checkFileOnRemote(String command) throws IOException {
-        send(command);
+    private Long checkFileOnRemote(String command, long offset) throws IOException {
+        send(command + " " +String.valueOf(offset));
         String response = receiveLine();
         if (response.trim().equals("No file")) {
             System.out.println(server.socket().getRemoteSocketAddress() + " >>> " + response);
@@ -96,39 +89,38 @@ public class Client {
         }
     }
 
-    private void download(File file, long offset, long fileSize) throws IOException {
+    private void download(String command, File file, long offset) throws IOException {
+        Long fileSize = checkFileOnRemote(command, 0);
+        if (fileSize == null) return;
         if (!file.exists()) {
             file.createNewFile();
             underDownloadedFiles.add(new Pair<>(file, server.socket().getRemoteSocketAddress().toString()));
         }
         AsynchronousFileChannel fileChannel = AsynchronousFileChannel.open(
                 Paths.get(file.getPath()), StandardOpenOption.WRITE);
-        send(String.valueOf(offset));
         while (true) {
-            if (offset >= fileSize) {
+            if (offset == fileSize) {
                 Pair<File, String> desiredFile = findUnderDownloadedFileBy(file.getName());
-                if (desiredFile != null) {
+                if (desiredFile != null)
                     if (desiredFile.getValue().equals(server.socket().getRemoteSocketAddress().toString())) {
                         underDownloadedFiles.remove(desiredFile);
                         System.out.println("File was downloaded");
                         fileChannel.close();
                         break;
                     }
-                }
             }
             byte[] response = receiveByteArray();
-            fileChannel.write(ByteBuffer.wrap(Arrays.copyOfRange(response, 0, response.length)), offset);
-            offset += response.length;
-            System.out.println(server.socket().getRemoteSocketAddress() + " >>> " + response.length + " bytes");
+            int bytesRead = offset + response.length >= fileSize ? (int) (fileSize - offset) : response.length;
+            fileChannel.write(ByteBuffer.wrap(Arrays.copyOfRange(response, 0, bytesRead)), offset);
+            offset += bytesRead;
+            System.out.println(server.socket().getRemoteSocketAddress() + " >>> " + bytesRead + " bytes");
         }
     }
 
     private Pair<File, String> findUnderDownloadedFileBy(String name) {
-        for (Pair<File, String> underDownloadedFile : underDownloadedFiles) {
-            if (name.toUpperCase().equals(underDownloadedFile.getKey().getName().toUpperCase())) {
+        for (Pair<File, String> underDownloadedFile : underDownloadedFiles)
+            if (name.toUpperCase().equals(underDownloadedFile.getKey().getName().toUpperCase()))
                 return underDownloadedFile;
-            }
-        }
         return null;
     }
 
@@ -146,6 +138,7 @@ public class Client {
     private byte[] receiveByteArray() throws IOException {
         ByteBuffer readBuffer = ByteBuffer.allocate(Constants.BUFFER_SIZE);
         server.read(readBuffer);
+        readBuffer.flip();
         return readBuffer.array();
     }
 }
