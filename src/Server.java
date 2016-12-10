@@ -23,11 +23,11 @@ public class Server {
     private List<FileForDownloading> files;
     private ByteBuffer receiveBuffer;
 
-    public void init(String host, int port) throws IOException {
+    public void init() throws IOException {
         selector = Selector.open();
         server = ServerSocketChannel.open();
         server.configureBlocking(false);
-        server.socket().bind(new InetSocketAddress(host, port));
+        server.socket().bind(new InetSocketAddress(Constants.SERVER_PORT));
         server.register(selector, server.validOps());
         files = new CopyOnWriteArrayList<>();
         receiveBuffer = ByteBuffer.allocate(Constants.BUFFER_SIZE);

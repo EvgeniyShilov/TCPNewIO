@@ -23,8 +23,8 @@ public class Client {
     private List<Pair<File, String>> underDownloadedFiles = new ArrayList<>();
     private ByteBuffer receiveBuffer = ByteBuffer.allocate(Constants.PACKET_SIZE);
 
-    public void connect(String host, int port) throws IOException {
-        InetSocketAddress hostAddress = new InetSocketAddress(host, port);
+    public void connect(String host) throws IOException {
+        InetSocketAddress hostAddress = new InetSocketAddress(host, Constants.SERVER_PORT);
         server = SocketChannel.open(hostAddress);
         server.setOption(StandardSocketOptions.SO_SNDBUF, Constants.BUFFER_SIZE);
         server.setOption(StandardSocketOptions.SO_RCVBUF, Constants.BUFFER_SIZE);
@@ -96,7 +96,7 @@ public class Client {
     }
 
     private void download(String command, File file, long offset) throws IOException {
-        Long fileSize = checkFileOnRemote(command, 0);
+        Long fileSize = checkFileOnRemote(command, offset);
         if (fileSize == null) return;
         if (!file.exists()) {
             file.createNewFile();
