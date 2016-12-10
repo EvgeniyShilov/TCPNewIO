@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
+import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
 import java.nio.channels.AsynchronousFileChannel;
 import java.nio.channels.SocketChannel;
@@ -12,16 +13,22 @@ import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
+import java.util.concurrent.Future;
 
 public class Client {
 
     private SocketChannel server;
     private List<Pair<File, String>> underDownloadedFiles = new ArrayList<>();
+    private ByteBuffer receiveBuffer = ByteBuffer.allocate(Constants.PACKET_SIZE);
 
     public void connect(String host, int port) throws IOException {
         InetSocketAddress hostAddress = new InetSocketAddress(host, port);
         server = SocketChannel.open(hostAddress);
+        server.setOption(StandardSocketOptions.SO_SNDBUF, Constants.BUFFER_SIZE);
+        server.setOption(StandardSocketOptions.SO_RCVBUF, Constants.BUFFER_SIZE);
+        server.socket().setSoTimeout(Constants.SO_TIMEOUT);
         System.out.println(server.socket().getRemoteSocketAddress() + " connected");
     }
 
@@ -34,7 +41,6 @@ public class Client {
                 if (process(command)) break;
             }
         } catch (IOException ignored) {
-            ignored.printStackTrace();
         } finally {
             System.out.println(server.socket().getRemoteSocketAddress() + " disconnected");
         }
@@ -98,22 +104,35 @@ public class Client {
         }
         AsynchronousFileChannel fileChannel = AsynchronousFileChannel.open(
                 Paths.get(file.getPath()), StandardOpenOption.WRITE);
+        List<Future> operations = new ArrayList<>();
+        Date startTime = new Date();
+        long initOffset = offset;
         while (true) {
             if (offset == fileSize) {
                 Pair<File, String> desiredFile = findUnderDownloadedFileBy(file.getName());
                 if (desiredFile != null)
                     if (desiredFile.getValue().equals(server.socket().getRemoteSocketAddress().toString())) {
                         underDownloadedFiles.remove(desiredFile);
-                        System.out.println("File was downloaded");
+                        Date endTime = new Date();
+                        double timeInSecs = (double)(endTime.getTime() - startTime.getTime()) / 1000D;
+                        double mBits = (double)((fileSize - initOffset) * 8) / 1000000D;
+                        double speed = timeInSecs == 0 ? Double.MAX_VALUE : mBits / timeInSecs;
+                        System.out.println("File was downloaded. Total speed: " + speed + " Mbits");
+                        while (true) {
+                            boolean easyEnd = true;
+                            for (Future operation : operations) if(!operation.isDone()) easyEnd = false;
+                            if (easyEnd) break;
+                        }
                         fileChannel.close();
                         break;
                     }
             }
             byte[] response = receiveByteArray();
             int bytesRead = offset + response.length >= fileSize ? (int) (fileSize - offset) : response.length;
-            fileChannel.write(ByteBuffer.wrap(Arrays.copyOfRange(response, 0, bytesRead)), offset);
+            operations.add(fileChannel.write(ByteBuffer.wrap(Arrays.copyOfRange(response, 0, bytesRead)), offset));
             offset += bytesRead;
-            System.out.println(server.socket().getRemoteSocketAddress() + " >>> " + bytesRead + " bytes");
+            System.out.println(server.socket().getRemoteSocketAddress() + " >>> " + bytesRead + " bytes, "
+                    + ((double)offset / (double)fileSize) * 100 + "%");
         }
     }
 
@@ -125,20 +144,22 @@ public class Client {
     }
 
     private void send(String request) throws IOException {
-        server.write(ByteBuffer.wrap(request.getBytes()));
+        ByteBuffer buffer = ByteBuffer.wrap(request.getBytes());
+        while(buffer.hasRemaining()) server.write(buffer);
         System.out.println(server.socket().getRemoteSocketAddress().toString() + " <<< " + request);
     }
 
     private String receiveLine() throws IOException {
-        ByteBuffer readBuffer = ByteBuffer.allocate(Constants.BUFFER_SIZE);
-        server.read(readBuffer);
-        return new String(readBuffer.array());
+        receiveBuffer.clear();
+        server.read(receiveBuffer);
+        receiveBuffer.flip();
+        return new String(receiveBuffer.array()).substring(0, receiveBuffer.limit());
     }
 
     private byte[] receiveByteArray() throws IOException {
-        ByteBuffer readBuffer = ByteBuffer.allocate(Constants.BUFFER_SIZE);
-        server.read(readBuffer);
-        readBuffer.flip();
-        return readBuffer.array();
+        receiveBuffer.clear();
+        server.read(receiveBuffer);
+        receiveBuffer.flip();
+        return Arrays.copyOf(receiveBuffer.array(), receiveBuffer.limit());
     }
 }

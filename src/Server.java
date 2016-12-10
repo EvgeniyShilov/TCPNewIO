@@ -3,6 +3,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.net.InetSocketAddress;
+import java.net.StandardSocketOptions;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
@@ -20,6 +21,7 @@ public class Server {
     private Selector selector;
     private ServerSocketChannel server;
     private List<FileForDownloading> files;
+    private ByteBuffer receiveBuffer;
 
     public void init(String host, int port) throws IOException {
         selector = Selector.open();
@@ -28,6 +30,7 @@ public class Server {
         server.socket().bind(new InetSocketAddress(host, port));
         server.register(selector, server.validOps());
         files = new CopyOnWriteArrayList<>();
+        receiveBuffer = ByteBuffer.allocate(Constants.BUFFER_SIZE);
     }
 
     public void listen() throws IOException {
@@ -40,7 +43,6 @@ public class Server {
                     if (key.isAcceptable()) accept();
                     else if (key.isReadable()) read(key);
                 } catch (Exception e) {
-                    e.printStackTrace();
                     close(key);
                 }
             }
@@ -50,6 +52,9 @@ public class Server {
 
     private void accept() throws IOException {
         SocketChannel client = server.accept();
+        client.setOption(StandardSocketOptions.SO_SNDBUF, Constants.BUFFER_SIZE);
+        client.setOption(StandardSocketOptions.SO_RCVBUF, Constants.BUFFER_SIZE);
+        client.socket().setSoTimeout(Constants.SO_TIMEOUT);
         client.configureBlocking(false);
         client.register(selector, SelectionKey.OP_READ, client.socket().getPort());
         System.out.println(client.socket().getRemoteSocketAddress() + " connected");
@@ -57,12 +62,12 @@ public class Server {
 
     private void read(SelectionKey key) throws IOException {
         SocketChannel client = (SocketChannel) key.channel();
-        ByteBuffer buffer = ByteBuffer.allocate(Constants.BUFFER_SIZE);
-        int bytesRead = client.read(buffer);
+        receiveBuffer.clear();
+        int bytesRead = client.read(receiveBuffer);
         if (bytesRead < 0) close(key);
         else {
-            buffer.flip();
-            String command = new String(buffer.array()).trim();
+            receiveBuffer.flip();
+            String command = new String(receiveBuffer.array()).substring(0, receiveBuffer.limit()).trim();
             System.out.println(client.socket().getRemoteSocketAddress() + " >>> " + command);
             process(key, command);
         }
@@ -114,7 +119,7 @@ public class Server {
         RandomAccessFile fileReader = file.getReader();
         long downloadedBytes = file.getDownloadedBytes();
         fileReader.seek(downloadedBytes);
-        byte[] bytes = new byte[Constants.BUFFER_SIZE];
+        byte[] bytes = new byte[Constants.PACKET_SIZE];
         int countBytes = fileReader.read(bytes);
         if (countBytes <= 0) {
             System.out.println("File was downloaded");
@@ -129,14 +134,15 @@ public class Server {
 
     private void send(SelectionKey key, String response) throws IOException {
         SocketChannel client = (SocketChannel) key.channel();
-        client.write(ByteBuffer.wrap(response.getBytes()));
+        ByteBuffer buffer = ByteBuffer.wrap(response.getBytes());
+        while(buffer.hasRemaining()) client.write(buffer);
         System.out.println(client.socket().getRemoteSocketAddress().toString() + " <<< " + response);
     }
 
     private void send(SelectionKey key, byte[] response) throws IOException {
         SocketChannel client = (SocketChannel) key.channel();
-        client.write(ByteBuffer.wrap(response));
-        System.out.println(client.socket().getRemoteSocketAddress().toString() + " <<< " + response.length + " bytes");
+        ByteBuffer buffer = ByteBuffer.wrap(response);
+        while(buffer.hasRemaining()) client.write(buffer);
     }
 
     private void close(SelectionKey key) throws IOException {
