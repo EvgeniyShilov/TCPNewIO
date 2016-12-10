@@ -84,7 +84,7 @@ public class Client {
     }
 
     private Long checkFileOnRemote(String command, long offset) throws IOException {
-        send(command + " " +String.valueOf(offset));
+        send(command + " " + String.valueOf(offset));
         String response = receiveLine();
         if (response.trim().equals("No file")) {
             System.out.println(server.socket().getRemoteSocketAddress() + " >>> " + response);
